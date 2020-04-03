@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/maxcleme/instagram-exporter/collector"
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,11 +66,13 @@ It exports the following metrics :
 		login, _ := cmd.Flags().GetString("ig_login")
 		password, _ := cmd.Flags().GetString("ig_password")
 		tokenPath, _ := cmd.Flags().GetString("ig_token_path")
+		cacheDuration, _ := cmd.Flags().GetDuration("cache_duration")
 
 		c, err := collector.Instagram(
 			collector.WithTokenPath(tokenPath),
 			collector.WithLogin(login, password),
 			collector.WithTargets(usernames...),
+			collector.WithCacheDuration(cacheDuration),
 		)
 		if err != nil {
 			logrus.WithError(err).Fatal("cannot create instagram collector")
@@ -109,6 +112,7 @@ func init() {
 	rootCmd.Flags().String("log_level", "info", "Log level")
 	rootCmd.Flags().Int("http_port", 2112, "Port used by Prometheus to expose metrics")
 	rootCmd.Flags().String("http_path", "/metrics", "Path used by Prometheus to expose metrics")
+	rootCmd.Flags().Duration("cache_duration", 5*time.Minute, "Cache duration")
 
 	// exporter flags
 	rootCmd.Flags().String("ig_login", "", "Instagram login")

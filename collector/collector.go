@@ -1,6 +1,9 @@
 package collector
 
 import (
+	"sync"
+	"time"
+
 	"github.com/ahmdrz/goinsta/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -8,11 +11,14 @@ import (
 
 type collector struct {
 	insta *goinsta.Instagram
+	cache []prometheus.Metric
+	mutex sync.Mutex
 
-	login     string
-	password  string
-	tokenPath string
-	usernames []string
+	login         string
+	password      string
+	tokenPath     string
+	usernames     []string
+	cacheDuration time.Duration
 }
 
 type Option func(c *collector)
@@ -33,6 +39,12 @@ func WithTokenPath(path string) Option {
 func WithTargets(usernames ...string) Option {
 	return func(c *collector) {
 		c.usernames = usernames
+	}
+}
+
+func WithCacheDuration(duration time.Duration) Option {
+	return func(c *collector) {
+		c.cacheDuration = duration
 	}
 }
 
@@ -59,11 +71,19 @@ func Instagram(opts ...Option) (*collector, error) {
 	}
 
 	c.insta = insta
+
+	go func(c *collector) {
+		for range time.Tick(c.cacheDuration) {
+			c.updateCache()
+		}
+	}(c)
+
+	c.updateCache()
 	return c, nil
 }
-
-func (c *collector) Collect(ch chan<- prometheus.Metric) {
-	logrus.Debug("collecting metrics")
+func (c *collector) updateCache() {
+	logrus.Debug("updating cache")
+	cache := make([]prometheus.Metric, 0)
 
 	for _, username := range c.usernames {
 		user, err := c.insta.Profiles.ByName(username)
@@ -71,23 +91,25 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 			logrus.WithError(err).Fatal("cannot fetch user profile")
 		}
 
-		ch <- prometheus.MustNewConstMetric(
-			mediaDesc,
-			prometheus.GaugeValue,
-			float64(user.MediaCount),
-			username,
-		)
-		ch <- prometheus.MustNewConstMetric(
-			followerDesc,
-			prometheus.GaugeValue,
-			float64(user.FollowerCount),
-			username,
-		)
-		ch <- prometheus.MustNewConstMetric(
-			followingDesc,
-			prometheus.GaugeValue,
-			float64(user.FollowingCount),
-			username,
+		cache = append(cache,
+			prometheus.MustNewConstMetric(
+				mediaDesc,
+				prometheus.GaugeValue,
+				float64(user.MediaCount),
+				username,
+			),
+			prometheus.MustNewConstMetric(
+				followerDesc,
+				prometheus.GaugeValue,
+				float64(user.FollowerCount),
+				username,
+			),
+			prometheus.MustNewConstMetric(
+				followingDesc,
+				prometheus.GaugeValue,
+				float64(user.FollowingCount),
+				username,
+			),
 		)
 
 		feed := user.Feed()
@@ -97,21 +119,37 @@ func (c *collector) Collect(ch chan<- prometheus.Metric) {
 
 		for feed.Next() {
 			for _, item := range feed.Items {
-				ch <- prometheus.MustNewConstMetric(
-					likeDesc,
-					prometheus.GaugeValue,
-					float64(item.Likes),
-					username, item.ID,
-				)
-				ch <- prometheus.MustNewConstMetric(
-					commentDesc,
-					prometheus.GaugeValue,
-					float64(item.CommentCount),
-					username, item.ID,
+				cache = append(cache,
+					prometheus.MustNewConstMetric(
+						likeDesc,
+						prometheus.GaugeValue,
+						float64(item.Likes),
+						username, item.ID,
+					),
+					prometheus.MustNewConstMetric(
+						commentDesc,
+						prometheus.GaugeValue,
+						float64(item.CommentCount),
+						username, item.ID,
+					),
 				)
 			}
 		}
 	}
+
+	c.mutex.Lock()
+	c.cache = cache
+	c.mutex.Unlock()
+	logrus.Debug("cache updated")
+}
+
+func (c *collector) Collect(ch chan<- prometheus.Metric) {
+	logrus.Debug("collecting metrics")
+	c.mutex.Lock()
+	for _, m := range c.cache {
+		ch <- m
+	}
+	c.mutex.Unlock()
 }
 
 func (c *collector) Describe(ch chan<- *prometheus.Desc) {

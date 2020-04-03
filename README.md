@@ -11,6 +11,7 @@ Put the following file into your home folder :
 http_port: 2112
 http_path: /metrics
 log_level: debug
+cache_duration: 5m
 
 ig_login: XXXXXXXXXXXXX
 ig_password: XXXXXXXXXXXXX
